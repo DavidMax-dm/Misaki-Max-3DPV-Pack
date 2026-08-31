@@ -7,6 +7,7 @@
 * Added new Script commands for calling specific functions.
 * Added specific SEKAI visual effects, which can be triggered through Script commands.
 
-# Special Thanks
+# Special Thanks(A-Z)
 
+* Codex
 * ReDIVA Source Code by [korenkonder](https://github.com/korenkonder)
