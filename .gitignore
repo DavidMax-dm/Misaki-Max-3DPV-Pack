@@ -1,0 +1,17 @@
+/build*/
+/.vs/
+/out/
+/dist/
+*.dll
+*.exe
+*.exp
+*.ilk
+*.lib
+*.obj
+*.pdb
+*.log
+*.dmp
+fog_shader_dump/
+fog_shader_overrides/
+.DS_Store
+Thumbs.db
