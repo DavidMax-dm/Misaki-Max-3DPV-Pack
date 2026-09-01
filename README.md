@@ -7,6 +7,11 @@
 * Added new Script commands for calling specific functions.
 * Added specific SEKAI visual effects, which can be triggered through Script commands.
 
+## Development
+
+- Designed by DavidMax
+- Code generated with OpenAI Codex based on the provided design and specifications
+
 # Special Thanks(A-Z)
 
 * Codex
