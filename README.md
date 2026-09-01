@@ -12,6 +12,12 @@
 - Designed by DavidMax
 - Code generated with OpenAI Codex based on the provided design and specifications
 
+## References
+
+- [ReDIVA](https://github.com/korenkonder/ReDIVA) — Referenced for research on file formats and data loading methods.
+
+The implementation in this project was developed separately and was later expanded through reverse engineering of the game's executable.
+
 # Special Thanks(A-Z)
 
 * Codex
