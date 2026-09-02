@@ -247,6 +247,36 @@ bool load_override(const wchar_t* stage, const void* bytecode, size_t length,
     return read_file(g_override_directory / filename, replacement);
 }
 
+bool load_embedded_override(const wchar_t* resource_name,
+    std::vector<uint8_t>& replacement) {
+    if (!g_plugin_module)
+        return false;
+    HRSRC resource = FindResourceW(g_plugin_module, resource_name,
+        MAKEINTRESOURCEW(10));
+    if (!resource)
+        return false;
+    HGLOBAL loaded = LoadResource(g_plugin_module, resource);
+    const DWORD size = SizeofResource(g_plugin_module, resource);
+    const void* data = loaded ? LockResource(loaded) : nullptr;
+    if (!data || !size)
+        return false;
+    const auto* begin = static_cast<const uint8_t*>(data);
+    replacement.assign(begin, begin + size);
+    return true;
+}
+
+bool is_p5_late_cloth_vs(const void* bytecode, size_t length) {
+    // RenderDoc event 8207: DXBC 27a2ab32-9a608077-0adf9325-470a4548.
+    if (!bytecode || length < 20)
+        return false;
+    const auto* words = static_cast<const uint32_t*>(bytecode);
+    return words[0] == 0x43425844u
+        && words[1] == 0x27A2AB32u
+        && words[2] == 0x9A608077u
+        && words[3] == 0x0ADF9325u
+        && words[4] == 0x470A4548u;
+}
+
 HRESULT STDMETHODCALLTYPE hooked_create_vertex_shader(ID3D11Device* device,
     const void* bytecode, SIZE_T length, ID3D11ClassLinkage* linkage,
     ID3D11VertexShader** shader) {
@@ -258,7 +288,10 @@ HRESULT STDMETHODCALLTYPE hooked_create_vertex_shader(ID3D11Device* device,
         std::lock_guard<std::mutex> lock(g_mutex);
         g_vs_hashes[*shader] = fnv1a64(bytecode, length);
     }
-    if (!contains_ascii(bytecode, length, "g_joint_transforms"))
+    const bool skinned = contains_ascii(bytecode, length,
+        "g_joint_transforms");
+    const bool p5_late_cloth = is_p5_late_cloth_vs(bytecode, length);
+    if (!skinned && !p5_late_cloth)
         return result;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -267,12 +300,17 @@ HRESULT STDMETHODCALLTYPE hooked_create_vertex_shader(ID3D11Device* device,
 
     std::vector<uint8_t> replacement;
     ID3D11VertexShader* alternate = nullptr;
-    if (load_override(L"vs", bytecode, length, replacement)
+    const bool have_override = p5_late_cloth
+        ? load_embedded_override(L"vs_P5_LATE", replacement)
+        : load_override(L"vs", bytecode, length, replacement);
+    if (have_override
         && SUCCEEDED(g_create_vertex_shader(device, replacement.data(),
             replacement.size(), linkage, &alternate)) && alternate) {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_character_vs[*shader] = alternate;
-        debug_log::line(L"Fog fix: prepared skinned character VS override");
+        debug_log::line(p5_late_cloth
+            ? L"Fog fix: prepared P5 late CLOTH VS override"
+            : L"Fog fix: prepared skinned character VS override");
     }
     return result;
 }

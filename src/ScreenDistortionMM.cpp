@@ -25,6 +25,13 @@
 namespace screen_distortion {
 namespace {
 
+// Release builds retain the bounded diagnostic branches for maintainability,
+// but compile every console trace to a no-op.
+template <typename... Args>
+int release_printf(const char*, Args&&...) {
+    return 0;
+}
+
 constexpr float kAmplitudeMultiplier = 2.5f;
 // Unity's PJSK post shaders apply their serialized offsets in an internal
 // screen-space domain; they are not direct 0..1 texture coordinates.  MM+
@@ -502,7 +509,7 @@ bool prewarm_final_scene_target(ID3D11Device* device) {
     if (ready) {
         D3D11_TEXTURE2D_DESC desc{};
         target->GetDesc(&desc);
-        std::printf("[MM ScreenFX] prewarmed final 3D target %ux%u before effects\n",
+        release_printf("[MM ScreenFX] prewarmed final 3D target %ux%u before effects\n",
             desc.Width, desc.Height);
         g_final_scene_target_prewarmed.store(true, std::memory_order_release);
     }
@@ -621,7 +628,7 @@ bool prewarm_effect_pipeline(ID3D11Device* device, ID3D11DeviceContext* context)
     release(completion);
     g_pipeline_warmed = true;
     g_effect_textures_warmed = true;
-    std::printf("[MM ScreenFX] prewarmed ScreenFX pipeline and %zu effect texture(s) before playback (%s, %llums)\n",
+    release_printf("[MM ScreenFX] prewarmed ScreenFX pipeline and %zu effect texture(s) before playback (%s, %llums)\n",
         g_effect_views.size(), completed ? "GPU complete" : "GPU wait timed out",
         static_cast<unsigned long long>(GetTickCount64() - wait_start));
     return true;
@@ -855,7 +862,7 @@ void draw_screen_effect_before_first_sprite(ID3D11DeviceContext* context) {
     g_sprite_effect_drawn = true;
     static std::atomic<bool> logged{};
     if (!logged.exchange(true, std::memory_order_acq_rel))
-        std::printf("[MM ScreenFX] pre-UI backbuffer boundary active\n");
+        release_printf("[MM ScreenFX] pre-UI backbuffer boundary active\n");
     render_after_post_process(context, scene_view);
     release(scene_view);
 }
@@ -933,7 +940,7 @@ void draw_screen_effect_after_final_scene_blit(
     g_sprite_effect_drawn = true;
     static std::atomic<bool> logged{};
     if (!logged.exchange(true, std::memory_order_acq_rel))
-        std::printf("[MM ScreenFX] scene-only insertion after final 3D blit active\n");
+        release_printf("[MM ScreenFX] scene-only insertion after final 3D blit active\n");
     render_after_post_process(nullptr, target_view);
     release(target_view);
 }
@@ -989,14 +996,14 @@ void trace_active_draw_target(ID3D11DeviceContext* context,
     ID3D11PixelShader* pixel_shader = nullptr;
     context->PSGetShader(&pixel_shader, nullptr, nullptr);
     if (sprite_draw) {
-        std::printf("[MM ScreenFX SpriteDraw] #%u context_type=%d caller=%p rva=%08llX ps=%p rt=%p %ux%u src0=%p %ux%u",
+        release_printf("[MM ScreenFX SpriteDraw] #%u context_type=%d caller=%p rva=%08llX ps=%p rt=%p %ux%u src0=%p %ux%u",
             index, static_cast<int>(context->GetType()), caller,
             static_cast<unsigned long long>(caller_rva),
             static_cast<void*>(pixel_shader),
             static_cast<void*>(rt_texture), rt_desc.Width, rt_desc.Height,
             static_cast<void*>(src_texture), src_desc.Width, src_desc.Height);
     } else {
-        std::printf("[MM ScreenFX FullResTrace] #%u caller=%p rva=%08llX ps=%p rt=%p %ux%u src0=%p %ux%u",
+        release_printf("[MM ScreenFX FullResTrace] #%u caller=%p rva=%08llX ps=%p rt=%p %ux%u src0=%p %ux%u",
             index, caller, static_cast<unsigned long long>(caller_rva),
             static_cast<void*>(pixel_shader),
             static_cast<void*>(rt_texture), rt_desc.Width, rt_desc.Height,
@@ -1014,11 +1021,11 @@ void trace_active_draw_target(ID3D11DeviceContext* context,
             reinterpret_cast<void**>(&extra_texture));
         if (extra_texture) extra_texture->GetDesc(&extra_desc);
         if (extra_texture)
-            std::printf(" s%zu=%p %ux%u", slot + 1,
+            release_printf(" s%zu=%p %ux%u", slot + 1,
                 static_cast<void*>(extra_texture), extra_desc.Width, extra_desc.Height);
         release(extra_texture); release(extra_resource); release(extra_srvs[slot]);
     }
-    std::printf("\n");
+    release_printf("\n");
     release(pixel_shader);
     // The immediate caller is MM+'s D3D command interpreter.  Capture the
     // frames above it for a small sample so we can identify the native batch
@@ -1031,15 +1038,15 @@ void trace_active_draw_target(ID3D11DeviceContext* context,
             void* frames[16]{};
             const USHORT count = CaptureStackBackTrace(0,
                 static_cast<DWORD>(std::size(frames)), frames, nullptr);
-            std::printf("[MM ScreenFX DrawStack] #%u", stack_sample);
+            release_printf("[MM ScreenFX DrawStack] #%u", stack_sample);
             for (USHORT i = 0; i < count; ++i) {
                 const auto address = reinterpret_cast<std::uintptr_t>(frames[i]);
                 const auto rva = address >= g_exe_base
                     ? address - g_exe_base : 0;
-                std::printf(" %p[%08llX]", frames[i],
+                release_printf(" %p[%08llX]", frames[i],
                     static_cast<unsigned long long>(rva));
             }
-            std::printf("\n");
+            release_printf("\n");
         }
     }
     release(src_texture); release(rt_texture);
@@ -1081,7 +1088,7 @@ void trace_sprite_pass_boundary(const char* phase) {
     if (rt_resource) rt_resource->QueryInterface(__uuidof(ID3D11Texture2D),
         reinterpret_cast<void**>(&rt_texture));
     if (rt_texture) rt_texture->GetDesc(&rt_desc);
-    std::printf("[MM ScreenFX SpriteBoundary] #%u %s rt=%p %ux%u",
+    release_printf("[MM ScreenFX SpriteBoundary] #%u %s rt=%p %ux%u",
         sample, phase, static_cast<void*>(rt_texture), rt_desc.Width, rt_desc.Height);
     for (size_t slot = 0; slot < std::size(srvs); ++slot) {
         ID3D11Resource* resource = nullptr;
@@ -1092,13 +1099,13 @@ void trace_sprite_pass_boundary(const char* phase) {
             reinterpret_cast<void**>(&texture));
         if (texture) texture->GetDesc(&desc);
         if (texture)
-            std::printf(" s%zu=%p %ux%u", slot,
+            release_printf(" s%zu=%p %ux%u", slot,
                 static_cast<void*>(texture), desc.Width, desc.Height);
         release(texture);
         release(resource);
         release(srvs[slot]);
     }
-    std::printf("\n");
+    release_printf("\n");
     release(rt_texture);
     release(rt_resource);
     release(rtv);
@@ -1143,7 +1150,7 @@ void render_before_sprite_pass() {
         context->PSSetShaderResources(1, 1, &null_srv);
         static std::atomic<bool> logged{};
         if (!logged.exchange(true, std::memory_order_acq_rel))
-            std::printf("[MM ScreenFX] processed shared 3D source s1 immediately before pass_sprite\n");
+            release_printf("[MM ScreenFX] processed shared 3D source s1 immediately before pass_sprite\n");
         render_after_post_process(context, scene_rtv);
         context->PSSetShaderResources(1, 1, &scene_srv);
     }
@@ -1279,7 +1286,7 @@ void finish_scene_composite_candidate(ID3D11DeviceContext* context,
     if (ready) {
         static std::atomic<bool> logged{};
         if (!logged.exchange(true, std::memory_order_acq_rel))
-            std::printf("[MM ScreenFX] RDC final post-process Draw(4) boundary active\n");
+            release_printf("[MM ScreenFX] RDC final post-process Draw(4) boundary active\n");
         render_after_post_process(context, target);
     }
     release(target);
@@ -1365,7 +1372,7 @@ void trace_sprite_command_list_execution(ID3D11DeviceContext* context,
     if (rt_resource) rt_resource->QueryInterface(__uuidof(ID3D11Texture2D),
         reinterpret_cast<void**>(&rt_texture));
     if (rt_texture) rt_texture->GetDesc(&rt_desc);
-    std::printf("[MM ScreenFX SpriteCommandList] #%u list=%p context_type=%d rt=%p %ux%u",
+    release_printf("[MM ScreenFX SpriteCommandList] #%u list=%p context_type=%d rt=%p %ux%u",
         sample, static_cast<void*>(command_list), static_cast<int>(context->GetType()),
         static_cast<void*>(rt_texture), rt_desc.Width, rt_desc.Height);
     for (size_t slot = 0; slot < std::size(srvs); ++slot) {
@@ -1377,11 +1384,11 @@ void trace_sprite_command_list_execution(ID3D11DeviceContext* context,
             reinterpret_cast<void**>(&texture));
         if (texture) texture->GetDesc(&desc);
         if (texture)
-            std::printf(" s%zu=%p %ux%u", slot,
+            release_printf(" s%zu=%p %ux%u", slot,
                 static_cast<void*>(texture), desc.Width, desc.Height);
         release(texture); release(resource); release(srvs[slot]);
     }
-    std::printf("\n");
+    release_printf("\n");
     release(rt_texture); release(rt_resource); release(rtv);
 }
 
@@ -1394,7 +1401,7 @@ HRESULT STDMETHODCALLTYPE hooked_finish_command_list(
         && g_sprite_pass_depth.load(std::memory_order_acquire) != 0) {
         std::lock_guard<std::mutex> lock(g_tagged_command_list_mutex);
         g_sprite_command_lists.insert(*command_list);
-        std::printf("[MM ScreenFX SpriteCommandList] recorded list=%p context_type=%d\n",
+        release_printf("[MM ScreenFX SpriteCommandList] recorded list=%p context_type=%d\n",
             static_cast<void*>(*command_list), static_cast<int>(context->GetType()));
     }
     return result;
@@ -1434,10 +1441,10 @@ void STDMETHODCALLTYPE hooked_execute_command_list(ID3D11DeviceContext* context,
             g_sprite_effect_drawn = true;
             static std::atomic<bool> logged{};
             if (!logged.exchange(true, std::memory_order_acq_rel))
-                std::printf("[MM ScreenFX] tagged Sprite command-list boundary active\n");
+                release_printf("[MM ScreenFX] tagged Sprite command-list boundary active\n");
             static std::atomic<bool> native_logged{};
             if (!native_logged.exchange(true, std::memory_order_acq_rel))
-                std::printf("[MM ScreenFX] native command-list 3D/UI boundary active\n");
+                release_printf("[MM ScreenFX] native command-list 3D/UI boundary active\n");
             render_after_post_process(context, scene_view);
             scene_view->Release();
         }
@@ -1619,7 +1626,7 @@ void begin_noise(const std::array<std::int32_t, 7>& values,
     g_noise_events.fetch_add(1, std::memory_order_relaxed);
     static std::atomic<bool> dispatched{};
     if (!dispatched.exchange(true, std::memory_order_acq_rel))
-        std::printf("[MM ScreenFX] dispatch NOISE time=%lld\n",
+        release_printf("[MM ScreenFX] dispatch NOISE time=%lld\n",
             static_cast<long long>(scheduled_time));
     debug_log::line(L"Screen distortion: NOISE intensity "
         + std::to_wstring(values[0]) + L" -> " + std::to_wstring(values[1])
@@ -1645,7 +1652,7 @@ void begin_pjsk_distortion(const std::array<std::int32_t, 12>& v,
     p.active = p.duration > 0; g_playing = true;
     static std::atomic<bool> dispatched{};
     if (!dispatched.exchange(true, std::memory_order_acq_rel))
-        std::printf("[MM ScreenFX] dispatch DISTORTION time=%lld\n",
+        release_printf("[MM ScreenFX] dispatch DISTORTION time=%lld\n",
             static_cast<long long>(scheduled_time));
 }
 
@@ -1669,7 +1676,7 @@ void begin_pjsk_chromatic(const std::array<std::int32_t, 20>& v,
     p.active = p.duration > 0; g_playing = true;
     static std::atomic<bool> dispatched{};
     if (!dispatched.exchange(true, std::memory_order_acq_rel))
-        std::printf("[MM ScreenFX] dispatch CHROMATIC time=%lld\n",
+        release_printf("[MM ScreenFX] dispatch CHROMATIC time=%lld\n",
             static_cast<long long>(scheduled_time));
 }
 
@@ -1688,7 +1695,7 @@ void begin_pjsk_overlay(const std::array<std::int32_t, 9>& v,
     p.active = p.duration > 0; g_playing = true;
     static std::atomic<bool> dispatched{};
     if (!dispatched.exchange(true, std::memory_order_acq_rel))
-        std::printf("[MM ScreenFX] dispatch OVERLAY time=%lld\n",
+        release_printf("[MM ScreenFX] dispatch OVERLAY time=%lld\n",
             static_cast<long long>(scheduled_time));
 }
 
@@ -1739,7 +1746,7 @@ void draw_distortion(ID3D11DeviceContext* context, const Evaluated& effect,
             || !ensure_targets(target_texture, target_view, device)))) {
         static std::atomic<bool> failed_logged{};
         if (!failed_logged.exchange(true, std::memory_order_acq_rel))
-            std::printf("[MM ScreenFX] fullscreen pass target setup failed context_type=%d\n",
+            release_printf("[MM ScreenFX] fullscreen pass target setup failed context_type=%d\n",
                 static_cast<int>(context->GetType()));
         release(target_texture);
         for (auto*& view : old_rtv) release(view);
@@ -1752,7 +1759,7 @@ void draw_distortion(ID3D11DeviceContext* context, const Evaluated& effect,
     if (!target_logged.exchange(true, std::memory_order_acq_rel)) {
         D3D11_TEXTURE2D_DESC target_desc{};
         (cached_target_ready ? g_back_buffer : target_texture)->GetDesc(&target_desc);
-        std::printf("[MM ScreenFX] fullscreen pass recorded context_type=%d target=%ux%u\n",
+        release_printf("[MM ScreenFX] fullscreen pass recorded context_type=%d target=%ux%u\n",
             static_cast<int>(context->GetType()), target_desc.Width,
             target_desc.Height);
     }
@@ -1951,7 +1958,7 @@ void distort_after_post_process_command_list(ID3D11DeviceContext* context) {
         g_post_insertions.fetch_add(1, std::memory_order_relaxed);
         static std::atomic<bool> logged{};
         if (!logged.exchange(true, std::memory_order_acq_rel))
-            std::printf("[MM ScreenFX] native 3D/UI command-list boundary active\n");
+            release_printf("[MM ScreenFX] native 3D/UI command-list boundary active\n");
         render_after_post_process(context, scene_view);
     }
     release(scene_view);
@@ -2018,7 +2025,7 @@ bool install_adjust_screen_hook() {
         ? DetourTransactionCommit() : DetourTransactionAbort();
     g_adjust_screen_hook_installed = attached == NO_ERROR
         && committed == NO_ERROR;
-    std::printf("[MM ScreenFX] pass_adjust_screen hook %s (%ld/%ld)\n",
+    release_printf("[MM ScreenFX] pass_adjust_screen hook %s (%ld/%ld)\n",
         g_adjust_screen_hook_installed ? "installed" : "failed",
         attached, committed);
     return g_adjust_screen_hook_installed;
@@ -2075,7 +2082,7 @@ void __fastcall hooked_pass_post_process(void* render_data_context,
                             D3D11_TEXTURE2D_DESC desc{};
                             if (texture)
                                 texture->GetDesc(&desc);
-                            std::printf("[MM ScreenFX] native POST_PROCESS return boundary active target=%ux%u\n",
+                            release_printf("[MM ScreenFX] native POST_PROCESS return boundary active target=%ux%u\n",
                                 desc.Width, desc.Height);
                             release(texture);
                             release(resource);
@@ -2106,7 +2113,7 @@ bool install_post_process_hook() {
         ? DetourTransactionCommit() : DetourTransactionAbort();
     g_post_process_hook_installed = attached == NO_ERROR
         && committed == NO_ERROR;
-    std::printf("[MM ScreenFX] native POST_PROCESS hook %s (%ld/%ld)\n",
+    release_printf("[MM ScreenFX] native POST_PROCESS hook %s (%ld/%ld)\n",
         g_post_process_hook_installed ? "installed" : "failed",
         attached, committed);
     return g_post_process_hook_installed;
@@ -2171,7 +2178,7 @@ bool install_native_adjust_blit_hook() {
         0xEC, 0x50,
     };
     if (std::memcmp(target, expected, sizeof(expected)) != 0) {
-        std::printf("[MM ScreenFX] native adjust blit signature mismatch\n");
+        release_printf("[MM ScreenFX] native adjust blit signature mismatch\n");
         return false;
     }
     g_native_adjust_blit = reinterpret_cast<NativeAdjustBlitFn>(target);
@@ -2184,7 +2191,7 @@ bool install_native_adjust_blit_hook() {
         ? DetourTransactionCommit() : DetourTransactionAbort();
     g_native_adjust_blit_hook_installed = attached == NO_ERROR
         && committed == NO_ERROR;
-    std::printf("[MM ScreenFX] native adjust blit hook %s (%ld/%ld)\n",
+    release_printf("[MM ScreenFX] native adjust blit hook %s (%ld/%ld)\n",
         g_native_adjust_blit_hook_installed ? "installed" : "failed",
         attached, committed);
     return g_native_adjust_blit_hook_installed;
@@ -2241,7 +2248,7 @@ void __fastcall hooked_native_command21(void* renderer, void* render_data,
         texture->GetDesc(&desc);
     if (source_texture)
         source_texture->GetDesc(&source_desc);
-    std::printf("[MM ScreenFX Command21] #%u h=%08X,%08X,%08X,%08X,%08X,%08X rt=%p %ux%u src=%p %ux%u\n",
+    release_printf("[MM ScreenFX Command21] #%u h=%08X,%08X,%08X,%08X,%08X,%08X rt=%p %ux%u src=%p %ux%u\n",
         sample, header[0], header[1], header[2], header[3], header[4], header[5],
         static_cast<void*>(texture), desc.Width, desc.Height,
         static_cast<void*>(source_texture), source_desc.Width, source_desc.Height);
@@ -2261,7 +2268,7 @@ bool install_native_command21_hook() {
         0xEC, 0x50, 0x48, 0x8B, 0x05,
     };
     if (std::memcmp(target, expected, sizeof(expected)) != 0) {
-        std::printf("[MM ScreenFX] native command21 signature mismatch\n");
+        release_printf("[MM ScreenFX] native command21 signature mismatch\n");
         return false;
     }
     g_native_command21 = reinterpret_cast<NativeCommand21Fn>(target);
@@ -2272,7 +2279,7 @@ bool install_native_command21_hook() {
     const LONG committed = attached == NO_ERROR
         ? DetourTransactionCommit() : DetourTransactionAbort();
     g_native_command21_hook_installed = attached == NO_ERROR && committed == NO_ERROR;
-    std::printf("[MM ScreenFX] native command21 hook %s (%ld/%ld)\n",
+    release_printf("[MM ScreenFX] native command21 hook %s (%ld/%ld)\n",
         g_native_command21_hook_installed ? "installed" : "failed", attached, committed);
     return g_native_command21_hook_installed;
 }
@@ -2323,7 +2330,7 @@ void capture_rdc_final_scene_target() {
             }
         }
         if (changed) {
-            std::printf("[MM ScreenFX] captured RDC final 3D target at pass_sprite: %ux%u\n",
+            release_printf("[MM ScreenFX] captured RDC final 3D target at pass_sprite: %ux%u\n",
                 desc.Width, desc.Height);
         }
     }
@@ -2369,7 +2376,7 @@ bool install_native_render_event_hook() {
         0x48, 0x8B, 0x3B,
     };
     if (std::memcmp(target, expected, sizeof(expected)) != 0) {
-        std::printf("[MM ScreenFX] native render-event signature mismatch\n");
+        release_printf("[MM ScreenFX] native render-event signature mismatch\n");
         return false;
     }
     g_native_render_event = reinterpret_cast<NativeRenderEventFn>(target);
@@ -2382,7 +2389,7 @@ bool install_native_render_event_hook() {
         ? DetourTransactionCommit() : DetourTransactionAbort();
     g_native_render_event_hook_installed = attached == NO_ERROR
         && committed == NO_ERROR;
-    std::printf("[MM ScreenFX] native render-event hook %s (%ld/%ld)\n",
+    release_printf("[MM ScreenFX] native render-event hook %s (%ld/%ld)\n",
         g_native_render_event_hook_installed ? "installed" : "failed",
         attached, committed);
     return g_native_render_event_hook_installed;
@@ -2426,7 +2433,7 @@ void on_frame(IDXGISwapChain* swap_chain) {
         const auto blits = g_native_blit_calls.exchange(0);
         const auto matches = g_native_blit_matches.exchange(0);
         const auto blit_targets = g_native_blit_targets.exchange(0);
-        std::printf("[MM ScreenFX] sprite=%llu noise=%llu active=%llu captured=%llu adjust=%llu cmd=%llu insert=%llu target=%llu draw=%llu blit=%llu/%llu/%llu\n",
+        release_printf("[MM ScreenFX] sprite=%llu noise=%llu active=%llu captured=%llu adjust=%llu cmd=%llu insert=%llu target=%llu draw=%llu blit=%llu/%llu/%llu\n",
             static_cast<unsigned long long>(sprite),
             static_cast<unsigned long long>(noise),
             static_cast<unsigned long long>(active),

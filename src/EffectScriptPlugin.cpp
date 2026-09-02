@@ -2,7 +2,6 @@
 #include <dxgi.h>
 
 #include "DebugLog.hpp"
-#include "DebugOverlay.hpp"
 #include "EffectScript.hpp"
 #include "FogDepthHeightFixMM.hpp"
 #include "ScreenDistortionMM.hpp"
@@ -588,7 +587,6 @@ void load_runtime_for_pv_locked(int32_t pv_id, void* pv_game_instance, const wch
 
     if (pv_id <= 0) {
         g_runtime.load_status = L"invalid/no PV id";
-        std::printf("[MM ScreenFX Load] pv=%d invalid PV id\n", pv_id);
         return;
     }
 
@@ -615,15 +613,12 @@ void load_runtime_for_pv_locked(int32_t pv_id, void* pv_game_instance, const wch
     g_runtime.script_path = script_path;
     if (script_path.empty()) {
         g_runtime.load_status = L"pv_db effect.script_file not found";
-        std::printf("[MM ScreenFX Load] pv=%d effect script not found\n", pv_id);
         return;
     }
 
     effect_script::LoadResult script = effect_script::load_file(script_path);
     if (!script.error.empty()) {
         g_runtime.load_status = L"script error: " + widen(script.error);
-        std::printf("[MM ScreenFX Load] pv=%d script error=%s file=%ls\n",
-            pv_id, script.error.c_str(), script_path.c_str());
         return;
     }
 
@@ -645,15 +640,6 @@ void load_runtime_for_pv_locked(int32_t pv_id, void* pv_game_instance, const wch
             g_runtime.resolved_count++;
 
     g_runtime.load_status = L"script loaded";
-    std::printf("[MM ScreenFX Load] pv=%d events=%llu resolved=%llu file=%ls\n",
-        pv_id,
-        static_cast<unsigned long long>(g_runtime.commands.size()),
-        static_cast<unsigned long long>(g_runtime.resolved_count),
-        script_path.c_str());
-    if (!g_runtime.commands.empty())
-        std::printf("[MM ScreenFX Load] timeline first=%d last=%d\n",
-            g_runtime.commands.front().event.time,
-            g_runtime.commands.back().event.time);
     debug_log::line(L"runtime load PV " + std::to_wstring(pv_id)
         + L" reason=" + (reason ? std::wstring(reason) : std::wstring(L"unknown"))
         + L" events=" + std::to_wstring(g_runtime.commands.size())
@@ -754,7 +740,6 @@ void update_runtime_from_pv_game(void* pv_game) {
         ? static_cast<int32_t>(current_time_ns / 10000)
         : 0;
 
-    static uint32_t timeline_diagnostic{};
 
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     const bool pv_changed = pv_id != g_runtime.loaded_pv_id;
@@ -798,18 +783,6 @@ void update_runtime_from_pv_game(void* pv_game) {
     sub_camera_mm::update_pv_time(pv_id, current_time_ns,
         g_runtime.current_field);
     screen_distortion::update_time(pv_id > 0, current_time_ns);
-
-    constexpr bool kScreenFxTimelineDiagnostic = false;
-    if (kScreenFxTimelineDiagnostic && pv_id == 949
-        && (++timeline_diagnostic % 120) == 0) {
-        const int32_t next_time = g_runtime.next_command < g_runtime.commands.size()
-            ? g_runtime.commands[g_runtime.next_command].event.time : -1;
-        std::printf("[MM ScreenFX Time] ns=%lld tick=%d next=%llu/%llu next_time=%d reset=%u\n",
-            static_cast<long long>(current_time_ns), current_tick,
-            static_cast<unsigned long long>(g_runtime.next_command),
-            static_cast<unsigned long long>(g_runtime.commands.size()),
-            next_time, reset ? 1u : 0u);
-    }
 
     while (g_runtime.next_command < g_runtime.commands.size()) {
         const effect_script::ResolvedCommand& command =
@@ -945,8 +918,10 @@ extern "C" __declspec(dllexport) void Init() {
         plugin_directory());
     const std::vector<std::filesystem::path> data_roots =
         effect_script::find_data_roots_from_config(mod_directory);
-    g_debug_enabled = read_debug_enabled_from_config(mod_directory);
-    debug_log::set_enabled(g_debug_enabled);
+    // Release DLL: diagnostic logging and the in-game debug overlay are
+    // intentionally unavailable regardless of user configuration.
+    g_debug_enabled = false;
+    debug_log::set_enabled(false);
     debug_log::init(g_module, kPluginNameW);
 
     g_supported_executable = script_pv_megamix::is_supported_executable();
@@ -995,16 +970,6 @@ extern "C" __declspec(dllexport) void OnFrame(IDXGISwapChain* swap_chain) {
     fog_depth_height_fix::ensure_device_hooks(swap_chain);
     sub_camera_mm::on_frame(swap_chain);
     screen_distortion::on_frame(swap_chain);
-    if (!g_debug_enabled)
-        return;
-
-    std::vector<std::wstring> lines;
-    {
-        std::lock_guard<std::mutex> lock(g_runtime_mutex);
-        lines = build_runtime_debug_lines_locked();
-    }
-    debug_overlay::set_lines(std::move(lines));
-    debug_overlay::render(swap_chain);
 }
 
 extern "C" __declspec(dllexport) void OnResize(IDXGISwapChain*) {
@@ -1012,8 +977,6 @@ extern "C" __declspec(dllexport) void OnResize(IDXGISwapChain*) {
         return;
     sub_camera_mm::on_resize();
     screen_distortion::on_resize();
-    if (g_debug_enabled)
-        debug_overlay::reset();
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {

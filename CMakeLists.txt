@@ -27,7 +27,6 @@ endforeach()
 
 add_library(MisakiMaxSongPack SHARED
     src/DebugLog.cpp
-    src/DebugOverlay.cpp
     src/EffectScript.cpp
     src/EffectScriptPlugin.cpp
     src/FogDepthHeightFixMM.cpp
