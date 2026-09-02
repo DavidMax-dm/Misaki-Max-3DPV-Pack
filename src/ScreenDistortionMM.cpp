@@ -40,6 +40,9 @@ constexpr float kPjskOverlayScale = 0.25f;
 constexpr bool kCaptureDiagnostic = false;
 // Temporary address-mapping build: observe native Draw callers only.  It
 // deliberately does not inject a pass or hook command-list execution.
+// Keep the proven MM+ path: attaching ExecuteCommandList/deferred-context
+// hooks here can conflict with other graphics mods and crash during startup.
+// ScreenFX still uses the native render-event/final-scene boundary below.
 constexpr bool kTraceNativeDrawCallersOnly = true;
 // Probe the native render boundary directly.  `pass_sprite` is the first 2D
 // pass; this build records its immediate D3D bindings but deliberately does

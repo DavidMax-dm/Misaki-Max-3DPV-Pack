@@ -12,6 +12,7 @@
 #include <detours.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cstdarg>
@@ -28,9 +29,18 @@
 namespace {
 
 HMODULE g_module = nullptr;
+HANDLE g_plugin_instance_guard = nullptr;
+std::mutex g_plugin_instance_mutex;
+bool g_plugin_instance_checked = false;
+bool g_primary_plugin_instance = false;
+bool g_supported_executable = false;
 
 constexpr const char* kPluginNameA = "Misaki&MaxSongPack";
 constexpr const wchar_t* kPluginNameW = L"Misaki&MaxSongPack";
+constexpr const wchar_t* kPluginInstanceMutex =
+    // Keep the historical ScriptPv mutex name so clean releases also refuse
+    // to coexist with older copies that contain the same native dispatcher.
+    L"Local\\MisakiMaxSongPack.ScriptPvMegaMix.6F4DF714";
 constexpr uintptr_t kPvGameCtrlRva = 0x241DF0;
 constexpr uintptr_t kParticleManagerRva = 0x16E4A70;
 constexpr uintptr_t kLoadSceneRva = 0x416C90;
@@ -83,6 +93,40 @@ std::vector<std::filesystem::path> g_data_roots;
 bool g_hook_installed = false;
 bool g_debug_enabled = false;
 std::wstring g_hook_status = L"hook: not installed";
+
+bool acquire_plugin_instance() {
+    std::lock_guard<std::mutex> lock(g_plugin_instance_mutex);
+    if (g_plugin_instance_checked)
+        return g_primary_plugin_instance;
+
+    g_plugin_instance_checked = true;
+    SetLastError(ERROR_SUCCESS);
+    g_plugin_instance_guard = CreateMutexW(nullptr, FALSE,
+        kPluginInstanceMutex);
+    if (!g_plugin_instance_guard)
+        return false;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(g_plugin_instance_guard);
+        g_plugin_instance_guard = nullptr;
+        std::printf("[Misaki&MaxSongPack] duplicate plugin instance disabled; first loaded copy remains active.\n");
+        OutputDebugStringA("[Misaki&MaxSongPack] duplicate plugin instance disabled.\n");
+        return false;
+    }
+
+    g_primary_plugin_instance = true;
+    return true;
+}
+
+std::filesystem::path plugin_directory() {
+    std::array<wchar_t, 32768> path{};
+    const DWORD length = g_module
+        ? GetModuleFileNameW(g_module, path.data(),
+            static_cast<DWORD>(path.size()))
+        : 0;
+    if (!length || length >= path.size())
+        return std::filesystem::current_path();
+    return std::filesystem::path(path.data()).parent_path();
+}
 
 struct RuntimeState {
     void* pv_game_instance = nullptr;
@@ -887,19 +931,31 @@ std::vector<std::wstring> build_patch_lines(const effect_script::PvFieldPatchRes
 } // namespace
 
 extern "C" __declspec(dllexport) void PreInit() {
+    if (!acquire_plugin_instance())
+        return;
     debug_log::init(g_module, kPluginNameW);
     debug_log::line(L"PreInit called");
     debug_log::line(L"PreInit cwd: " + debug_log::current_directory());
 }
 
 extern "C" __declspec(dllexport) void Init() {
+    if (!acquire_plugin_instance())
+        return;
     const std::filesystem::path mod_directory = effect_script::find_mod_directory(
-        std::filesystem::current_path());
+        plugin_directory());
     const std::vector<std::filesystem::path> data_roots =
         effect_script::find_data_roots_from_config(mod_directory);
     g_debug_enabled = read_debug_enabled_from_config(mod_directory);
     debug_log::set_enabled(g_debug_enabled);
     debug_log::init(g_module, kPluginNameW);
+
+    g_supported_executable = script_pv_megamix::is_supported_executable();
+    if (!g_supported_executable) {
+        std::printf("[Misaki&MaxSongPack] unsupported DivaMegaMix.exe; native hooks disabled safely.\n");
+        debug_log::line(L"unsupported DivaMegaMix.exe; all native hooks disabled");
+        g_hook_status = L"hook: disabled (unsupported DivaMegaMix.exe)";
+        return;
+    }
 
     fog_depth_height_fix::initialize(g_module);
     screen_distortion::initialize();
@@ -927,11 +983,15 @@ extern "C" __declspec(dllexport) void Init() {
 }
 
 extern "C" __declspec(dllexport) void PostInit() {
+    if (!g_primary_plugin_instance || !g_supported_executable)
+        return;
     log("PostInit");
     sub_camera_mm::initialize_probe();
 }
 
 extern "C" __declspec(dllexport) void OnFrame(IDXGISwapChain* swap_chain) {
+    if (!g_primary_plugin_instance || !g_supported_executable)
+        return;
     fog_depth_height_fix::ensure_device_hooks(swap_chain);
     sub_camera_mm::on_frame(swap_chain);
     screen_distortion::on_frame(swap_chain);
@@ -948,6 +1008,8 @@ extern "C" __declspec(dllexport) void OnFrame(IDXGISwapChain* swap_chain) {
 }
 
 extern "C" __declspec(dllexport) void OnResize(IDXGISwapChain*) {
+    if (!g_primary_plugin_instance || !g_supported_executable)
+        return;
     sub_camera_mm::on_resize();
     screen_distortion::on_resize();
     if (g_debug_enabled)

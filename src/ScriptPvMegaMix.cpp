@@ -57,7 +57,6 @@ HMODULE g_module{};
 DscCtrl g_original_dsc_ctrl{};
 bool g_in_supplemental_dispatch{};
 bool g_hook_installed{};
-HANDLE g_process_guard{};
 
 std::vector<script_pv::DscEvent> g_events;
 std::vector<std::filesystem::path> g_loaded_paths;
@@ -490,19 +489,6 @@ bool initialize(HMODULE plugin_module) {
     g_module = plugin_module;
     if (!executable_matches_megamix())
         return false;
-
-    g_process_guard = CreateMutexW(nullptr, FALSE,
-        L"Local\\MisakiMaxSongPack.ScriptPvMegaMix.6F4DF714");
-    if (!g_process_guard) {
-        log_line("Integrated ScriptPv could not create its process guard.");
-        return false;
-    }
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        CloseHandle(g_process_guard);
-        g_process_guard = nullptr;
-        log_line("Integrated ScriptPv is already active from another DLL copy.");
-        return true;
-    }
 
     log_line("Misaki&MaxSongPack: initializing integrated ScriptPv for MegaMix.");
     g_hook_installed = install_dsc_ctrl_hook();
