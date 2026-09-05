@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include <d3d11.h>
 #include <dxgi.h>
 
 #include "DebugLog.hpp"
@@ -33,6 +34,31 @@ std::mutex g_plugin_instance_mutex;
 bool g_plugin_instance_checked = false;
 bool g_primary_plugin_instance = false;
 bool g_supported_executable = false;
+std::mutex g_d3d_state_mutex;
+IDXGISwapChain* g_d3d_swap_chain = nullptr;
+
+void remember_d3d_swap_chain(IDXGISwapChain* swap_chain) {
+    if (!swap_chain) return;
+    std::lock_guard<std::mutex> lock(g_d3d_state_mutex);
+    if (g_d3d_swap_chain == swap_chain) return;
+    swap_chain->AddRef();
+    IDXGISwapChain* previous = g_d3d_swap_chain;
+    g_d3d_swap_chain = swap_chain;
+    if (previous) previous->Release();
+}
+
+IDXGISwapChain* acquire_remembered_d3d_swap_chain() {
+    std::lock_guard<std::mutex> lock(g_d3d_state_mutex);
+    if (g_d3d_swap_chain) g_d3d_swap_chain->AddRef();
+    return g_d3d_swap_chain;
+}
+
+void initialize_graphics_for_swap_chain(IDXGISwapChain* swap_chain) {
+    if (!swap_chain || !g_primary_plugin_instance || !g_supported_executable)
+        return;
+    fog_depth_height_fix::ensure_device_hooks(swap_chain);
+    screen_distortion::on_frame(swap_chain);
+}
 
 constexpr const char* kPluginNameA = "Misaki&MaxSongPack";
 constexpr const wchar_t* kPluginNameW = L"Misaki&MaxSongPack";
@@ -934,6 +960,10 @@ extern "C" __declspec(dllexport) void Init() {
 
     fog_depth_height_fix::initialize(g_module);
     screen_distortion::initialize();
+    if (IDXGISwapChain* swap_chain = acquire_remembered_d3d_swap_chain()) {
+        initialize_graphics_for_swap_chain(swap_chain);
+        swap_chain->Release();
+    }
     const bool script_pv_installed =
         script_pv_megamix::initialize(g_module);
     debug_log::line(script_pv_installed
@@ -964,9 +994,16 @@ extern "C" __declspec(dllexport) void PostInit() {
     sub_camera_mm::initialize_probe();
 }
 
+extern "C" __declspec(dllexport) void D3DInit(IDXGISwapChain* swap_chain,
+    ID3D11Device*, ID3D11DeviceContext*) {
+    remember_d3d_swap_chain(swap_chain);
+    initialize_graphics_for_swap_chain(swap_chain);
+}
+
 extern "C" __declspec(dllexport) void OnFrame(IDXGISwapChain* swap_chain) {
     if (!g_primary_plugin_instance || !g_supported_executable)
         return;
+    remember_d3d_swap_chain(swap_chain);
     fog_depth_height_fix::ensure_device_hooks(swap_chain);
     sub_camera_mm::on_frame(swap_chain);
     screen_distortion::on_frame(swap_chain);

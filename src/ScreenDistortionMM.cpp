@@ -1239,8 +1239,11 @@ ID3D11RenderTargetView* capture_scene_composite_candidate(
     }
     const bool matches_final_scene_composite = target && target_texture
         && scene_carrier && target_texture == scene_carrier
-        && input_desc[0].Width == target_desc.Width
-        && input_desc[0].Height == target_desc.Height
+        // The native post-process input can be allocation-aligned (e.g.
+        // 1920x1088) while the scene carrier is 1920x1080. Identify the
+        // carrier by resource identity rather than equal allocation sizes.
+        && input_desc[0].Width >= target_desc.Width
+        && input_desc[0].Height >= target_desc.Height
         && target_desc.Width >= 2 && target_desc.Height >= 2;
     release(scene_carrier);
     release(target_texture); release(target_resource);
@@ -1285,6 +1288,7 @@ void finish_scene_composite_candidate(ID3D11DeviceContext* context,
     }
     if (ready) {
         static std::atomic<bool> logged{};
+        g_ui_effect_serial = g_present_serial.load(std::memory_order_acquire);
         if (!logged.exchange(true, std::memory_order_acq_rel))
             release_printf("[MM ScreenFX] RDC final post-process Draw(4) boundary active\n");
         render_after_post_process(context, target);
@@ -1731,7 +1735,7 @@ void draw_distortion(ID3D11DeviceContext* context, const Evaluated& effect,
     // RDC final-composite hook.  Reusing it avoids a resource query and the
     // associated driver synchronization for every frame of an effect.
     const bool cached_target_ready = target_override && g_back_buffer
-        && g_scene_copy && g_scene_view && g_back_buffer_view;
+        && g_scene_copy && g_scene_view && g_back_buffer_view == target_override;
     ID3D11Texture2D* target_texture = nullptr;
     if (!cached_target_ready) {
         ID3D11Resource* target_resource = nullptr;
@@ -2477,7 +2481,8 @@ void on_frame(IDXGISwapChain* swap_chain) {
     if (context) {
         capture_adjust_screen_target(context, swap_chain, device);
         install_context_hooks(context);
-        install_deferred_context_hooks(device);
+        if (!kTraceNativeDrawCallersOnly)
+            install_deferred_context_hooks(device);
         if (ensure_device_resources(device)
             && (!g_final_scene_target_prewarmed.load(std::memory_order_acquire)
                 || !g_pipeline_warmed || !g_effect_textures_warmed)) {
