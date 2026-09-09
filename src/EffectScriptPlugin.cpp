@@ -839,8 +839,24 @@ int32_t __fastcall pv_game_ctrl_hook(void* pv_game, float delta_time, int64_t cu
     return result;
 }
 
-bool validate_bytes(uint8_t* address, const std::vector<uint8_t>& expected) {
-    return std::equal(expected.begin(), expected.end(), address);
+// Originally called validate_bytes; now validates hook target entry points.
+bool is_valid_hook_target(uint8_t* address, const std::vector<uint8_t>& expected) {
+    if (std::equal(expected.begin(), expected.end(), address))
+        return true;
+
+    // Allow chaining over common x64 detours installed by other mods. Still reject unknown patches.
+    const bool relative_jump = address[0] == 0xE9;
+    const bool indirect_jump = address[0] == 0xFF && address[1] == 0x25;
+    const bool absolute_indirect_jump = address[0] == 0xFF
+        && address[1] == 0x24 && address[2] == 0x25;
+    const bool absolute_jump = address[0] == 0x48 && address[1] == 0xB8
+        && address[10] == 0xFF && address[11] == 0xE0;
+    if (relative_jump || indirect_jump || absolute_indirect_jump || absolute_jump) {
+        debug_log::line(L"Accepted existing x64 detour at native hook target; chaining through it.");
+        return true;
+    }
+
+    return false;
 }
 
 void install_hooks() {
@@ -851,7 +867,7 @@ void install_hooks() {
     }
 
     auto* pv_game_ctrl = reinterpret_cast<uint8_t*>(base + kPvGameCtrlRva);
-    if (!validate_bytes(pv_game_ctrl, { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x20 })) {
+    if (!is_valid_hook_target(pv_game_ctrl, { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x20 })) {
         g_hook_status = L"hook: failed (pv_game::ctrl signature mismatch)";
         debug_log::line(g_hook_status);
         return;
@@ -863,7 +879,7 @@ void install_hooks() {
     g_free_scene_effect = reinterpret_cast<FreeSceneEffectFn>(base + kFreeSceneEffectRva);
     auto* effect_inst_x_reset = reinterpret_cast<uint8_t*>(
         base + kEffectInstXResetRva);
-    if (!validate_bytes(effect_inst_x_reset,
+    if (!is_valid_hook_target(effect_inst_x_reset,
         { 0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74,
           0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x20 })) {
         g_hook_status = L"hook: failed (EffectInstX::Reset signature mismatch)";
