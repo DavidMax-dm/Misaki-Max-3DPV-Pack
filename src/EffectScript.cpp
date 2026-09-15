@@ -29,6 +29,7 @@ constexpr int32_t kFuncNoise = 166; // Plugin extension: NOISE(...), screen dist
 constexpr int32_t kFuncPjskDistortion = 167;
 constexpr int32_t kFuncPjskChromatic = 168;
 constexpr int32_t kFuncPjskOverlay = 169;
+constexpr int32_t kFuncSubFrameRender = 170;
 constexpr const char* kGeneratedBegin = "# BEGIN Misaki&MaxSongPack generated pv_field";
 constexpr const char* kGeneratedEnd = "# END Misaki&MaxSongPack generated pv_field";
 
@@ -138,7 +139,7 @@ bool parse_records(
         switch (func) {
         case kFuncEnd:
         case kChunkEof:
-            std::sort(events.begin(), events.end(),
+            std::stable_sort(events.begin(), events.end(),
                 [](const Event& lhs, const Event& rhs) { return lhs.time < rhs.time; });
             return true;
 
@@ -171,14 +172,18 @@ bool parse_records(
             break;
         }
 
-        case kFuncAutoDof: {
+        case kFuncAutoDof:
+        case kFuncSubFrameRender: {
             if (offset + 4 > bytes.size()) {
-                error = "AUTO_DOF is truncated";
+                error = func == kFuncAutoDof
+                    ? "AUTO_DOF is truncated"
+                    : "SUBFRAMERENDER is truncated";
                 return false;
             }
 
             Event event;
-            event.action = EventAction::AutoDof;
+            event.action = func == kFuncAutoDof
+                ? EventAction::AutoDof : EventAction::SubFrameRender;
             event.time = time;
             event.value = read_i32_le(bytes, offset);
             offset += 4;
@@ -914,7 +919,8 @@ std::vector<ResolvedCommand> build_commands(
             || event.action == EventAction::Noise
             || event.action == EventAction::PjskDistortion
             || event.action == EventAction::PjskChromatic
-            || event.action == EventAction::PjskOverlay) {
+            || event.action == EventAction::PjskOverlay
+            || event.action == EventAction::SubFrameRender) {
             command.effect_name = event.value ? "AUTO_DOF ON" : "AUTO_DOF OFF";
             if (event.action == EventAction::Noise)
                 command.effect_name = "NOISE";
@@ -924,6 +930,9 @@ std::vector<ResolvedCommand> build_commands(
                 command.effect_name = "PJSK_CHROMATIC";
             else if (event.action == EventAction::PjskOverlay)
                 command.effect_name = "PJSK_OVERLAY";
+            else if (event.action == EventAction::SubFrameRender)
+                command.effect_name = event.value
+                    ? "SUBFRAMERENDER ON" : "SUBFRAMERENDER OFF";
             command.resolved = true;
             commands.push_back(std::move(command));
             continue;

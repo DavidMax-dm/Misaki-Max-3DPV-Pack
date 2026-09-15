@@ -1,7 +1,12 @@
 /build*/
 /.vs/
+/x64/
+/Debug/
+/Release/
 /out/
 /dist/
+*.vcxproj.user
+*.user
 *.dll
 *.exe
 *.exp

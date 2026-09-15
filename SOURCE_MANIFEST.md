@@ -1,12 +1,7 @@
-# Release source baseline
+# Release source manifest
 
-This directory is an isolated source worktree for the public release line. It
-was created from Git commit:
-
-`155665e8ffc75fdc72a1a080bea42b0a74aae87c`
-
-No files were copied from the dirty development tree. Existing source trees,
-build directories, and the installed mod DLL were not modified.
+This directory is the public release source worktree. It contains two
+independently linked DIVA Mod Loader plugins in one CMake/Visual Studio build.
 
 ## Included components
 
@@ -18,10 +13,16 @@ build directories, and the installed mod DLL were not modified.
 | Height-fog corrections | `src/FogDepthHeightFixMM.cpp`, `resources/fog_shaders/*.cso` |
 | Release logging implementation | `src/DebugLog.cpp` |
 | Disabled sub-camera ABI stub | `src/SubCameraMMDisabled.cpp` |
-| Parser verification | `tests/ScriptPvDscParserTests.cpp` |
+| Independent secondary-camera renderer | `SubCamera/src/SubCameraPlugin.cpp` |
+| Parser verification | `tests/ScriptPvDscParserTests.cpp`, `tests/EffectScriptExtensionTests.cpp` |
 
 Experimental `SubCameraMM.cpp`, extended-movie sources, generated shader dumps,
-RenderDoc captures, logs, and build products are intentionally excluded.
+RenderDoc captures, logs, game assets, and build products are intentionally
+excluded.
+
+`Misaki&MaxSongPack.dll` owns the plugin-side `script_effect` parser and exports
+`MisakiMax_GetSubFrameRenderEnabled`. `SubCamera.dll` resolves that export at
+runtime; there is no link-time dependency between the DLLs.
 
 ## Installed DLL reference
 
@@ -49,3 +50,7 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DDETOURS_ROOT="<path-to-d
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
+
+The generated `MisakiMaxSongPack.sln` contains independent
+`MisakiMaxSongPack` and `SubCamera` projects, and building the solution produces
+`Misaki&MaxSongPack.dll` and `SubCamera.dll`.

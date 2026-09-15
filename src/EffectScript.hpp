@@ -16,6 +16,7 @@ enum class EventAction {
     PjskDistortion,
     PjskChromatic,
     PjskOverlay,
+    SubFrameRender,
 };
 
 struct Event {

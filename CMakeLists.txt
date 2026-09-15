@@ -50,6 +50,8 @@ target_link_libraries(MisakiMaxSongPack PRIVATE
 set_target_properties(MisakiMaxSongPack PROPERTIES
     OUTPUT_NAME "Misaki&MaxSongPack")
 
+add_subdirectory(SubCamera)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(ScriptPvIntegratedParserTests
@@ -59,4 +61,12 @@ if(BUILD_TESTING)
     target_include_directories(ScriptPvIntegratedParserTests PRIVATE src)
     add_test(NAME ScriptPvIntegratedParserTests
         COMMAND ScriptPvIntegratedParserTests)
+
+    add_executable(EffectScriptExtensionTests
+        src/EffectScript.cpp
+        tests/EffectScriptExtensionTests.cpp)
+    target_compile_features(EffectScriptExtensionTests PRIVATE cxx_std_20)
+    target_include_directories(EffectScriptExtensionTests PRIVATE src)
+    add_test(NAME EffectScriptExtensionTests
+        COMMAND EffectScriptExtensionTests)
 endif()

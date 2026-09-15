@@ -7,6 +7,19 @@
 * Added new Script commands for calling specific functions.
 * Added specific SEKAI visual effects, which can be triggered through Script commands.
 
+## Plugin components
+
+The source tree builds two independent DIVA Mod Loader plugins:
+
+* `Misaki&MaxSongPack.dll` provides the script/effect extensions, including
+  the plugin-owned `SUBFRAMERENDER` command and its exported read-only state.
+* `SubCamera.dll` evaluates the second `CameraRoot`, renders an independent
+  offscreen scene with private SSS, and exposes it through a high-resolution
+  stage RenderTexture.
+
+`SubCamera.dll` resolves `MisakiMax_GetSubFrameRenderEnabled` dynamically at
+runtime, so the projects remain independently linkable.
+
 ## Development
 
 - Designed by DavidMax

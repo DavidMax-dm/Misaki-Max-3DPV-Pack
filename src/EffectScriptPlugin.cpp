@@ -19,11 +19,13 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <regex>
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -94,6 +96,7 @@ FreeSceneEffectFn g_free_scene_effect = nullptr;
 EffectInstXResetFn g_original_effect_inst_x_reset = nullptr;
 void* g_particle_manager = nullptr;
 std::atomic<int32_t> g_native_pv_id{-1};
+std::atomic<bool> g_sub_frame_render_enabled{false};
 
 struct DofF2 {
     float focus = 10.0f;
@@ -161,6 +164,7 @@ struct RuntimeState {
     int32_t loaded_pv_id = -1;
     std::filesystem::path script_path;
     std::vector<effect_script::ResolvedCommand> commands;
+    std::vector<std::pair<int32_t, bool>> sub_frame_render_events;
     std::vector<effect_script::FieldChange> field_changes;
     int32_t current_field = -1;
     size_t next_command = 0;
@@ -387,6 +391,8 @@ std::wstring action_name(effect_script::EventAction action) {
         return L"PJSK_CHROMATIC";
     case effect_script::EventAction::PjskOverlay:
         return L"PJSK_OVERLAY";
+    case effect_script::EventAction::SubFrameRender:
+        return L"SUBFRAMERENDER";
     }
 
     return L"UNKNOWN";
@@ -602,6 +608,7 @@ void load_runtime_for_pv_locked(int32_t pv_id, void* pv_game_instance, const wch
 
     set_auto_dof_enabled_locked(false, false);
     screen_distortion::reset();
+    g_sub_frame_render_enabled.store(false, std::memory_order_release);
 
     g_runtime = RuntimeState{};
     g_runtime.pv_game_instance = pv_game_instance;
@@ -642,9 +649,12 @@ void load_runtime_for_pv_locked(int32_t pv_id, void* pv_game_instance, const wch
         return;
     }
 
+    log("[EXTDSC] loaded PV %d: %ls", pv_id, script_path.c_str());
+
     effect_script::LoadResult script = effect_script::load_file(script_path);
     if (!script.error.empty()) {
         g_runtime.load_status = L"script error: " + widen(script.error);
+        log("[EXTDSC] parse error: %s", script.error.c_str());
         return;
     }
 
@@ -660,6 +670,14 @@ void load_runtime_for_pv_locked(int32_t pv_id, void* pv_game_instance, const wch
             return left.event.time < right.event.time;
         });
 
+    for (const effect_script::ResolvedCommand& command : g_runtime.commands) {
+        if (command.event.action == effect_script::EventAction::SubFrameRender)
+            g_runtime.sub_frame_render_events.emplace_back(
+                command.event.time, command.event.value != 0);
+    }
+    log("[EXTDSC] parsed %zu SUBFRAMERENDER events",
+        g_runtime.sub_frame_render_events.size());
+
     g_runtime.resolved_count = 0;
     for (const effect_script::ResolvedCommand& command : g_runtime.commands)
         if (command.resolved)
@@ -669,11 +687,18 @@ void load_runtime_for_pv_locked(int32_t pv_id, void* pv_game_instance, const wch
     debug_log::line(L"runtime load PV " + std::to_wstring(pv_id)
         + L" reason=" + (reason ? std::wstring(reason) : std::wstring(L"unknown"))
         + L" events=" + std::to_wstring(g_runtime.commands.size())
+        + L" subframerender="
+            + std::to_wstring(g_runtime.sub_frame_render_events.size())
         + L" resolved=" + std::to_wstring(g_runtime.resolved_count)
         + L" file=" + script_path.wstring());
 }
 
 void dispatch_effect_locked(const effect_script::ResolvedCommand& command) {
+    // This latch is reconstructed authoritatively from the complete timeline
+    // every pv_game tick, so dispatch must not mutate it incrementally.
+    if (command.event.action == effect_script::EventAction::SubFrameRender)
+        return;
+
     if (command.event.action == effect_script::EventAction::AutoDof) {
         set_auto_dof_enabled_locked(command.event.value != 0, true);
         return;
@@ -783,9 +808,11 @@ void update_runtime_from_pv_game(void* pv_game) {
     // exit/restart passes through a different/invalid PV id, so PV identity
     // is the session boundary; a same-PV rewind is only a seek.
     const bool reset = pv_changed;
-    if (reset)
+    if (reset) {
+        log("[PV] changed %d -> %d", g_runtime.loaded_pv_id, pv_id);
         load_runtime_for_pv_locked(pv_id, pv_game,
             L"pv changed");
+    }
 
     if (time_rewound && !reset) {
         g_runtime.next_command = static_cast<size_t>(std::upper_bound(
@@ -799,6 +826,21 @@ void update_runtime_from_pv_game(void* pv_game) {
     g_runtime.pv_id = pv_id;
     g_runtime.current_time_ns = current_time_ns;
     g_runtime.current_tick = current_tick;
+
+    const auto sub_end = std::upper_bound(
+        g_runtime.sub_frame_render_events.begin(),
+        g_runtime.sub_frame_render_events.end(), current_tick,
+        [](int32_t tick, const std::pair<int32_t, bool>& event) {
+            return tick < event.first;
+        });
+    const bool sub_enabled = sub_end != g_runtime.sub_frame_render_events.begin()
+        ? std::prev(sub_end)->second : false;
+    const bool old_sub_enabled = g_sub_frame_render_enabled.exchange(
+        sub_enabled, std::memory_order_acq_rel);
+    if (old_sub_enabled != sub_enabled)
+        log("[SUBFRAMERENDER] %s -> %s at tick %d",
+            old_sub_enabled ? "ON" : "OFF",
+            sub_enabled ? "ON" : "OFF", current_tick);
     g_runtime.current_field = -1;
     for (const auto& change : g_runtime.field_changes) {
         if (change.time > current_tick)
@@ -928,6 +970,10 @@ std::vector<std::wstring> build_patch_lines(const effect_script::PvFieldPatchRes
 // DML loads the DLL before Init/PostInit and calls exported functions by name.
 // Keep game hooks out of DllMain; install them from Init or PreInit instead.
 } // namespace
+
+extern "C" __declspec(dllexport) bool MisakiMax_GetSubFrameRenderEnabled() {
+    return g_sub_frame_render_enabled.load(std::memory_order_acquire);
+}
 
 extern "C" __declspec(dllexport) void PreInit() {
     if (!acquire_plugin_instance())
